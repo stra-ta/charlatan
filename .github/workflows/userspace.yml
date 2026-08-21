@@ -1,0 +1,14 @@
+name: userspace
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S userspace -B build/userspace -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/userspace --parallel
+      - run: ctest --test-dir build/userspace --output-on-failure

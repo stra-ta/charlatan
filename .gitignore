@@ -1,0 +1,11 @@
+/build/
+/kernel/*.ko
+/kernel/*.mod
+/kernel/*.mod.c
+/kernel/*.mod.o
+/kernel/*.o
+/kernel/*.order
+/kernel/*.symvers
+/kernel/.*.cmd
+/kernel/.tmp_versions/
+/results/
