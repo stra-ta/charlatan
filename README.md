@@ -88,7 +88,7 @@ The delayed worker simulates a device producer, while `write()` gives tests a de
 | --- | --- |
 | Ubuntu 26.04 ARM64 VM | 10 consecutive integration runs passed. |
 | Ubuntu 26.04 ARM64 VM | Active-worker stress run completed 914,326 writes, 908,379 reads, and 335 resets with zero unexpected errno values. |
-| Ubuntu 26.04 ARM64 VM | ASan and UBSan integration run passed. |
+| Ubuntu 26.04 ARM64 VM | Userspace ASan/UBSan integration run passed. |
 | GitHub Actions Ubuntu 24.04 | C++20 build and smoke usage test run on pushes and pull requests. |
 
 The integration client covers queue boundaries, invalid user destinations, wraparound, reset, `poll`, `epoll`, overflow accounting, ioctl validation, injected `EIO`, and concurrent producer control.
