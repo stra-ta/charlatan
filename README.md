@@ -1,12 +1,12 @@
-# Charlatan
+# charlatan
 
-Charlatan is a virtual Linux streaming character device with a C++20 test client.
+charlatan is a virtual Linux streaming character device with a C++20 test client.
 
 It is a small driver project for practicing the boundary between kernel code and userspace.
 
 It targets systems-software, embedded-Linux, and low-level C++ work.
 
-Charlatan builds against the running distribution kernel and matching headers in an ARM64 Ubuntu VM.
+charlatan builds against the running distribution kernel and matching headers in an ARM64 Ubuntu VM.
 
 ## Quick start
 
@@ -114,4 +114,4 @@ Kernel lock debugging and kernel sanitizers depend on the target distribution ke
 
 ## License
 
-Charlatan is released under the [MIT License](LICENSE).
+charlatan is released under the [MIT License](LICENSE).
