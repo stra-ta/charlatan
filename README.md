@@ -8,6 +8,8 @@ It targets systems-software, embedded-Linux, and low-level C++ work.
 
 Charlatan builds against the running distribution kernel and matching headers in an ARM64 Ubuntu VM.
 
+![Charlatan event path from C++ clients through the character device to the mutex-protected ring and simulated producer.](docs/architecture.svg)
+
 ## Quick start
 
 Run these commands inside the Ubuntu VM from the repository root.
@@ -56,7 +58,23 @@ The methodology and earlier observations are in [docs/measurements.md](docs/meas
 
 ## Architecture
 
-![Charlatan event path from C++ clients through the character device to the mutex-protected ring and simulated producer.](docs/architecture.svg)
+```text
+userspace clients          kernel module                 device internals
+----------------          -------------                 -----------------
+read / write /            /dev/charlatan0               mutex-protected ring
+ioctl / epoll     ----->  file_operations       ----->  (128-slot FIFO)
+                                   |
+                                   v
+                          wait queue + delayed producer
+```
+
+| Component | Role |
+| --- | --- |
+| C++20 clients | Drive the device through system calls and assertions. |
+| `/dev/charlatan0` | Character device exposing the file operations. |
+| Bounded ring | 128-slot FIFO holding events under one mutex. |
+| Wait queue | Wakes blocked readers on events, reset, and capacity changes. |
+| Delayed producer | Simulates a hardware producer at a configurable rate. |
 
 The kernel owns queue mutation and wakes waiters after events, resets, and capacity changes.
 
