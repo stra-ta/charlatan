@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
+  <title id="title">Charlatan concurrency</title>
+  <desc id="desc">All ring access is guarded by one mutex. ioctl drives a delayed producer that writes into the ring; a full ring drops the newest event and increments statistics. Concurrent producer control while the producer is active is the deterministic race pinned by a regression test.</desc>
+  <defs>
+    <marker id="c-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2f7d5b"/>
+    </marker>
+    <marker id="c-return" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#7d4f6b"/>
+    </marker>
+    <style>
+      .canvas { fill: #f7faf8; }
+      .title { fill: #20262a; font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #59616a; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .group { fill: #59616a; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.4px; }
+      .node { fill: #ffffff; stroke: #20262a; stroke-width: 1.5; rx: 10; }
+      .node-title { fill: #20262a; font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .node-copy { fill: #59616a; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .number { fill: #2f7d5b; font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .flow { fill: none; stroke: #2f7d5b; stroke-width: 2.5; marker-end: url(#c-arrow); }
+      .race { fill: none; stroke: #7d4f6b; stroke-width: 2; stroke-dasharray: 5 5; marker-end: url(#c-return); }
+      .lock rect { fill: #eaf2ec; stroke: #2f7d5b; stroke-width: 1.5; rx: 10; }
+      .lock .label { fill: #1f5a40; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .race-box rect { fill: #fbf3f7; stroke: #7d4f6b; stroke-width: 1.5; rx: 10; }
+      .race-label { fill: #5f3b52; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .race-copy { fill: #59616a; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="960" height="560"/>
+  <text class="title" x="50" y="52">Charlatan concurrency</text>
+  <text class="subtitle" x="50" y="79">One producer control path writes through one mutex-protected ring.</text>
+
+  <g class="lock" transform="translate(490 145)">
+    <rect width="200" height="56"/>
+    <text class="label" x="100" y="34">mutex guards ring</text>
+  </g>
+
+  <rect class="node" x="50" y="260" width="180" height="100"/>
+  <text class="number" x="70" y="288">01</text>
+  <text class="node-title" x="140" y="312">PRODUCER_CONTROL</text>
+  <text class="node-copy" x="140" y="338">start / pause / rate</text>
+
+  <rect class="node" x="270" y="260" width="180" height="100"/>
+  <text class="number" x="290" y="288">02</text>
+  <text class="node-title" x="360" y="312">delayed producer</text>
+  <text class="node-copy" x="360" y="338">writes events</text>
+
+  <rect class="node" x="490" y="260" width="200" height="100"/>
+  <text class="number" x="510" y="288">03</text>
+  <text class="node-title" x="590" y="312">event ring</text>
+  <text class="node-copy" x="590" y="338">128 slots · FIFO</text>
+
+  <rect class="node" x="730" y="260" width="180" height="100"/>
+  <text class="number" x="750" y="288">04</text>
+  <text class="node-title" x="820" y="312">when full</text>
+  <text class="node-copy" x="820" y="338">drop newest + stats++</text>
+
+  <path class="flow" d="M230 310 H270"/>
+  <path class="flow" d="M450 310 H490"/>
+  <path class="flow" d="M690 310 H730"/>
+  <path class="flow" d="M590 201 V260"/>
+
+  <path d="M140 360 C 140 415, 260 415, 330 450" fill="none" stroke="#7d4f6b" stroke-width="2" stroke-dasharray="5 5"/>
+  <path d="M360 360 C 360 415, 420 415, 450 450" fill="none" stroke="#7d4f6b" stroke-width="2" stroke-dasharray="5 5"/>
+
+  <g class="race-box" transform="translate(160 450)">
+    <rect width="640" height="70"/>
+    <text class="race-label" x="320" y="28">deterministic race regression</text>
+    <text class="race-copy" x="320" y="52">producer control toggled while the delayed producer is active - pinned by a test</text>
+  </g>
+</svg>

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="580" viewBox="0 0 960 580" role="img" aria-labelledby="title desc">
+  <title id="title">Charlatan system call surface</title>
+  <desc id="desc">C++ clients reach the character device through open, read, write, poll/epoll, and ioctl. Reads block or return immediately, poll reports readiness through the wait queue, and a reset bumps the per-descriptor generation so blocked readers receive ECANCELED.</desc>
+  <defs>
+    <marker id="c-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2f7d5b"/>
+    </marker>
+    <marker id="c-return" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#7d4f6b"/>
+    </marker>
+    <style>
+      .canvas { fill: #f7faf8; }
+      .title { fill: #20262a; font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #59616a; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .group { fill: #59616a; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.4px; }
+      .node { fill: #ffffff; stroke: #20262a; stroke-width: 1.5; rx: 10; }
+      .node-title { fill: #20262a; font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .node-copy { fill: #59616a; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .number { fill: #2f7d5b; font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .flow { fill: none; stroke: #2f7d5b; stroke-width: 2.5; marker-end: url(#c-arrow); }
+      .return { fill: none; stroke: #7d4f6b; stroke-width: 1.5; stroke-dasharray: 5 5; marker-end: url(#c-return); }
+      .note-box rect { fill: #fbf3f7; stroke: #7d4f6b; stroke-width: 1.5; rx: 10; }
+      .note-label { fill: #5f3b52; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+      .note-copy { fill: #59616a; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="960" height="580"/>
+  <text class="title" x="50" y="52">Charlatan system call surface</text>
+  <text class="subtitle" x="50" y="79">Five entry points enter one device through its file-operations surface.</text>
+  <text class="group" x="50" y="150">USERSPACE</text>
+  <text class="group" x="350" y="150">FILE OPERATIONS</text>
+  <text class="group" x="730" y="150">DEVICE</text>
+
+  <rect class="node" x="50" y="230" width="230" height="120"/>
+  <text class="number" x="70" y="258">01</text>
+  <text class="node-title" x="165" y="282">C++20 clients</text>
+  <text class="node-copy" x="165" y="308">integration, stress, benchmark</text>
+  <text class="node-copy" x="165" y="330">read · write · poll · ioctl</text>
+
+  <rect x="350" y="170" width="280" height="315" rx="14" fill="#eaf2ec" stroke="#b9d4c5" stroke-width="1.5"/>
+  <rect class="node" x="370" y="190" width="240" height="48"/>
+  <text class="number" x="388" y="216">02</text>
+  <text class="node-title" x="490" y="221">open</text>
+  <rect class="node" x="370" y="248" width="240" height="48"/>
+  <text class="number" x="388" y="274">03</text>
+  <text class="node-title" x="490" y="273">read</text>
+  <text class="node-copy" x="490" y="291">blocking / nonblocking</text>
+  <rect class="node" x="370" y="306" width="240" height="48"/>
+  <text class="number" x="388" y="332">04</text>
+  <text class="node-title" x="490" y="337">write (exact size)</text>
+  <rect class="node" x="370" y="364" width="240" height="48"/>
+  <text class="number" x="388" y="390">05</text>
+  <text class="node-title" x="490" y="395">poll / epoll</text>
+  <rect class="node" x="370" y="422" width="240" height="48"/>
+  <text class="number" x="388" y="448">06</text>
+  <text class="node-title" x="490" y="453">ioctl (versioned)</text>
+
+  <rect class="node" x="730" y="220" width="180" height="220"/>
+  <text class="number" x="750" y="248">07</text>
+  <text class="node-title" x="820" y="274">ring + wait queue</text>
+  <text class="node-copy" x="820" y="308">128 slots, one mutex</text>
+  <text class="node-copy" x="820" y="334">FIFO, drops, statistics</text>
+  <text class="node-copy" x="820" y="360">readiness via wait queue</text>
+
+  <path class="flow" d="M280 290 H350"/>
+  <path class="flow" d="M630 330 H730"/>
+
+  <g class="note-box" transform="translate(50 505)">
+    <rect width="860" height="56"/>
+    <text class="note-label" x="430" y="22">ECANCELED</text>
+    <text class="note-copy" x="430" y="44">blocked readers wake when reset bumps the per-descriptor generation</text>
+  </g>
+</svg>

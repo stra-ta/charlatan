@@ -3,22 +3,22 @@
   <desc id="desc">C++ clients use system calls on charlatan0. The kernel module coordinates a mutex-protected ring, wait queue, statistics, and delayed simulated producer.</desc>
   <defs>
     <style>
-      .canvas { fill: #fbfaf7; }
-      .title { fill: #20262d; font: 700 28px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
+      .canvas { fill: #f7faf8; }
+      .title { fill: #20262a; font: 700 28px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
       .subtitle { fill: #59616a; font: 14px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
       .group { fill: #59616a; font: 700 12px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; letter-spacing: 1.4px; }
-      .node { fill: #ffffff; stroke: #20262d; stroke-width: 1.5; rx: 10; }
-      .node-title { fill: #20262d; font: 700 15px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
+      .node { fill: #ffffff; stroke: #20262a; stroke-width: 1.5; rx: 10; }
+      .node-title { fill: #20262a; font: 700 15px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
       .node-copy { fill: #59616a; font: 13px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
-      .number { fill: #93643a; font: 700 13px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
-      .flow { fill: none; stroke: #93643a; stroke-width: 2.5; marker-end: url(#arrow); }
-      .return { fill: none; stroke: #59616a; stroke-width: 1.5; stroke-dasharray: 5 5; marker-end: url(#return-arrow); }
+      .number { fill: #2f7d5b; font: 700 13px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; }
+      .flow { fill: none; stroke: #2f7d5b; stroke-width: 2.5; marker-end: url(#arrow); }
+      .return { fill: none; stroke: #7d4f6b; stroke-width: 1.5; stroke-dasharray: 5 5; marker-end: url(#return-arrow); }
     </style>
     <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-      <path d="M0,0 L9,4.5 L0,9 Z" fill="#93643a"/>
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2f7d5b"/>
     </marker>
     <marker id="return-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-      <path d="M0,0 L9,4.5 L0,9 Z" fill="#59616a"/>
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#7d4f6b"/>
     </marker>
   </defs>
   <rect class="canvas" width="900" height="470"/>

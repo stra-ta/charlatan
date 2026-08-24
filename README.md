@@ -40,6 +40,10 @@ If the dependency check fails, run `./scripts/install-deps.sh` and repeat the ch
 - Exercises concurrent producer control with a deterministic race regression.
 - Provides integration, stress, benchmark, and ASan/UBSan runs.
 
+![Charlatan system call surface](docs/SYSCALLS.svg)
+
+![Charlatan ioctl ABI](docs/IOCTL-ABI.svg)
+
 ## Benchmark snapshot
 
 The benchmark alternates one `write()` and one `read()` so the queue does not overflow.
@@ -81,6 +85,8 @@ The kernel owns queue mutation and wakes waiters after events, resets, and capac
 Readers compete for one global FIFO.
 
 The delayed worker simulates a device producer, while `write()` gives tests a deterministic injection path.
+
+![Charlatan concurrency](docs/CONCURRENCY.svg)
 
 ## Verification
 
