@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug userspace",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/presets/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "Address and undefined behavior sanitizers",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/presets/asan-ubsan",
+      "cacheVariables": {
+        "CHARLATAN_SANITIZER": "address,undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "asan-ubsan",
+      "configurePreset": "asan-ubsan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "configurePreset": "asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
