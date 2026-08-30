@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <unistd.h>
 
 #include "charlatan.h"
+#include "mmap_snapshot.h"
 
 namespace {
 
@@ -128,6 +130,36 @@ void test_read_contracts() {
             "read-only test mapping cleanup failed");
     event = read_event(fd.get());
     require(event.value == 17 && event.flags == 3, "invalid-buffer read consumed an event");
+}
+
+void test_mmap_snapshot() {
+    auto fd = open_device(O_RDWR | O_NONBLOCK);
+    reset_and_acknowledge(fd.get());
+    charlatan_test::MmapSnapshot snapshot(fd.get());
+
+    auto empty = snapshot.read();
+    require(empty.abi_version == CHARLATAN_MMAP_ABI_VERSION, "mmap ABI version mismatch");
+    require(empty.event_size == sizeof(charlatan_event), "mmap event size mismatch");
+    require(empty.queue_capacity == CHARLATAN_MMAP_SNAPSHOT_EVENTS, "mmap capacity mismatch");
+    require(empty.queue_depth == 0, "empty mmap snapshot reported queued events");
+    require((empty.version & 1U) == 0, "mmap snapshot was published with an odd version");
+
+    write_event(fd.get(), 707, 11);
+    const auto queued = snapshot.read();
+    require(queued.queue_depth == 1, "mmap snapshot missed an enqueued event");
+    require(queued.events[0].value == 707 && queued.events[0].flags == 11,
+            "mmap snapshot payload mismatch");
+    require(queued.events[0].sequence + 1 == queued.next_sequence,
+            "mmap snapshot sequence metadata mismatch");
+
+    (void)read_event(fd.get());
+    const auto drained = snapshot.read();
+    require(drained.queue_depth == 0, "mmap snapshot retained a consumed event");
+
+    void* writable = ::mmap(nullptr, static_cast<std::size_t>(::getpagesize()),
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd.get(), 0);
+    require(writable == MAP_FAILED && errno == EPERM,
+            "mmap snapshot accepted a writable mapping");
 }
 
 void test_blocking_and_wraparound() {
@@ -325,6 +357,7 @@ void test_reset_wakes_blocked_reader() {
 int main() {
     try {
         test_read_contracts();
+        test_mmap_snapshot();
         test_blocking_and_wraparound();
         test_poll_and_epoll();
         test_control_plane();

@@ -5,6 +5,8 @@ C++20 harness -- read/write/ioctl/poll/epoll --> /dev/charlatan0
                                                     |
                                              mutex-protected ring
                                              wait queue + delayed worker
+                                                    |
+                                      read-only mmap observation page
 ```
 
 The ring has 128 fixed-size `charlatan_event` slots.
@@ -14,6 +16,10 @@ The queue is global, not per file descriptor.
 Competing readers consume from the same FIFO, and writers serialize through one mutex.
 
 The implementation chooses ordinary mutexes and wait queues over lock-free state because reset, fault injection, and statistics must observe one coherent queue state.
+
+The mmap path publishes a copy of the queue for observation through a sequence counter.
+
+It does not replace the mutex-protected FIFO and it does not grant userspace ownership of queue slots.
 
 ## File operation contract
 

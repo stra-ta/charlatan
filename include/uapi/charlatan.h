@@ -6,13 +6,34 @@
 #include <linux/types.h>
 
 #define CHARLATAN_ABI_VERSION 4U
+#define CHARLATAN_MMAP_ABI_VERSION 1U
 #define CHARLATAN_EVENT_BYTES 24U
+#define CHARLATAN_MMAP_SNAPSHOT_EVENTS 128U
 
 struct charlatan_event {
 	__u64 sequence;
 	__u64 produced_ns;
 	__u32 value;
 	__u32 flags;
+};
+
+/*
+ * Read-only observation page exposed by mmap(offset=0).
+ *
+ * The kernel publishes an odd version while it is copying a snapshot and an
+ * even version after the copy is complete.  Readers must load version with
+ * acquire semantics, copy the fields, load version again, and accept the
+ * snapshot only when both values are equal and even.
+ */
+struct charlatan_mmap_snapshot {
+	__u64 version;
+	__u64 reset_generation;
+	__u64 next_sequence;
+	__u32 abi_version;
+	__u32 event_size;
+	__u32 queue_capacity;
+	__u32 queue_depth;
+	struct charlatan_event events[CHARLATAN_MMAP_SNAPSHOT_EVENTS];
 };
 
 struct charlatan_stats {

@@ -5,6 +5,7 @@
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
@@ -30,6 +31,10 @@ struct charlatan_device {
 	wait_queue_head_t read_wait;
 	struct delayed_work producer_work;
 	struct charlatan_event queue[CHARLATAN_QUEUE_CAPACITY];
+	struct page *snapshot_page;
+	struct charlatan_mmap_snapshot *snapshot;
+	atomic_t snapshot_mappings;
+	u64 snapshot_version;
 	u32 head;
 	u32 tail;
 	u32 depth;
@@ -50,6 +55,57 @@ static dev_t charlatan_devt;
 static struct cdev charlatan_cdev;
 static struct class *charlatan_class;
 static struct charlatan_device charlatan;
+
+static void charlatan_snapshot_locked(void)
+{
+	struct charlatan_mmap_snapshot *snapshot = charlatan.snapshot;
+	u32 index;
+
+	if (!snapshot)
+		return;
+
+	/* An odd version marks a snapshot that readers must retry. */
+	charlatan.snapshot_version += 1;
+	WRITE_ONCE(snapshot->version, charlatan.snapshot_version);
+	smp_wmb();
+	snapshot->reset_generation = charlatan.reset_generation;
+	snapshot->next_sequence = charlatan.next_sequence;
+	snapshot->abi_version = CHARLATAN_MMAP_ABI_VERSION;
+	snapshot->event_size = sizeof(struct charlatan_event);
+	snapshot->queue_capacity = CHARLATAN_QUEUE_CAPACITY;
+	snapshot->queue_depth = charlatan.depth;
+	for (index = 0; index < charlatan.depth; index++) {
+		u32 queue_index = (charlatan.tail + index) % CHARLATAN_QUEUE_CAPACITY;
+
+		snapshot->events[index] = charlatan.queue[queue_index];
+	}
+	for (; index < CHARLATAN_MMAP_SNAPSHOT_EVENTS; index++)
+		memset(&snapshot->events[index], 0, sizeof(snapshot->events[index]));
+	smp_wmb();
+	charlatan.snapshot_version += 1;
+	WRITE_ONCE(snapshot->version, charlatan.snapshot_version);
+}
+
+static void charlatan_snapshot_vma_open(struct vm_area_struct *vma)
+{
+	struct charlatan_device *device = vma->vm_private_data;
+
+	atomic_inc(&device->snapshot_mappings);
+	__module_get(THIS_MODULE);
+}
+
+static void charlatan_snapshot_vma_close(struct vm_area_struct *vma)
+{
+	struct charlatan_device *device = vma->vm_private_data;
+
+	atomic_dec(&device->snapshot_mappings);
+	module_put(THIS_MODULE);
+}
+
+static const struct vm_operations_struct charlatan_snapshot_vm_ops = {
+	.open = charlatan_snapshot_vma_open,
+	.close = charlatan_snapshot_vma_close,
+};
 
 static void charlatan_control_delay(u32 delay_ms)
 {
@@ -96,6 +152,7 @@ static bool charlatan_enqueue_locked(u32 value, u32 flags, bool injected)
 	if (injected)
 		charlatan.stats.injected++;
 	charlatan.stats.queue_depth = charlatan.depth;
+	charlatan_snapshot_locked();
 	return true;
 }
 
@@ -141,6 +198,28 @@ static int charlatan_open(struct inode *inode, struct file *file)
 static int charlatan_release(struct inode *inode, struct file *file)
 {
 	kfree(file->private_data);
+	return 0;
+}
+
+static int charlatan_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	unsigned long length = vma->vm_end - vma->vm_start;
+	int error;
+
+	if (vma->vm_pgoff != 0 || length != PAGE_SIZE)
+		return -EINVAL;
+	if (vma->vm_flags & VM_WRITE)
+		return -EPERM;
+
+	/* The page is an observation snapshot, never a user-writable ring. */
+	vma->vm_flags &= ~VM_MAYWRITE;
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	vma->vm_private_data = &charlatan;
+	vma->vm_ops = &charlatan_snapshot_vm_ops;
+	error = vm_insert_page(vma, vma->vm_start, charlatan.snapshot_page);
+	if (error)
+		return error;
 	return 0;
 }
 
@@ -199,6 +278,8 @@ static ssize_t charlatan_read(struct file *file, char __user *buffer, size_t cou
 		made_space = true;
 		copied++;
 	}
+	if (made_space)
+		charlatan_snapshot_locked();
 	mutex_unlock(&charlatan.lock);
 	if (made_space)
 		wake_up_interruptible(&charlatan.read_wait);
@@ -258,6 +339,7 @@ static void charlatan_reset_locked(void)
 	charlatan.stats.queue_depth = 0;
 	charlatan.stats.resets++;
 	charlatan.reset_generation++;
+	charlatan_snapshot_locked();
 }
 
 static long charlatan_ioctl(struct file *file, unsigned int command, unsigned long argument)
@@ -375,6 +457,7 @@ static const struct file_operations charlatan_fops = {
 	.read = charlatan_read,
 	.write = charlatan_write,
 	.poll = charlatan_poll,
+	.mmap = charlatan_mmap,
 	.unlocked_ioctl = charlatan_ioctl,
 	.llseek = noop_llseek,
 };
@@ -387,11 +470,19 @@ static int __init charlatan_init(void)
 	mutex_init(&charlatan.lock);
 	mutex_init(&charlatan.producer_control_lock);
 	atomic_set(&charlatan.producer_control_waiters, 0);
+	atomic_set(&charlatan.snapshot_mappings, 0);
+	charlatan.snapshot_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!charlatan.snapshot_page)
+		return -ENOMEM;
+	charlatan.snapshot = page_address(charlatan.snapshot_page);
 	init_waitqueue_head(&charlatan.read_wait);
 	INIT_DELAYED_WORK(&charlatan.producer_work, charlatan_producer);
+	mutex_lock(&charlatan.lock);
+	charlatan_snapshot_locked();
+	mutex_unlock(&charlatan.lock);
 	error = alloc_chrdev_region(&charlatan_devt, 0, 1, CHARLATAN_DEVICE_NAME);
 	if (error)
-		return error;
+		goto free_snapshot;
 	cdev_init(&charlatan_cdev, &charlatan_fops);
 	charlatan_cdev.owner = THIS_MODULE;
 	error = cdev_add(&charlatan_cdev, charlatan_devt, 1);
@@ -416,6 +507,10 @@ delete_cdev:
 	cdev_del(&charlatan_cdev);
 unregister_region:
 	unregister_chrdev_region(charlatan_devt, 1);
+	free_snapshot:
+	free_page((unsigned long)charlatan.snapshot);
+	charlatan.snapshot = NULL;
+	charlatan.snapshot_page = NULL;
 	return error;
 }
 
@@ -432,6 +527,9 @@ static void __exit charlatan_exit(void)
 	class_destroy(charlatan_class);
 	cdev_del(&charlatan_cdev);
 	unregister_chrdev_region(charlatan_devt, 1);
+	free_page((unsigned long)charlatan.snapshot);
+	charlatan.snapshot = NULL;
+	charlatan.snapshot_page = NULL;
 	pr_info("charlatan: unregistered\n");
 }
 
