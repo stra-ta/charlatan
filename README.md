@@ -7,12 +7,23 @@ A Linux streaming character device and C++20 userspace harness for studying the 
 The module exposes a global 128-event FIFO through read, write, poll, epoll, and a versioned ioctl ABI.
 A read-only mmap page publishes a sequence-checked observation snapshot without handing queue ownership to userspace.
 
+## Measured snapshot
+
+| Workload | Result |
+| --- | ---: |
+| 10,000 alternating write/read event round trips | 8.30e5 events/s |
+
+Apple M1 host, Lima Apple Virtualization, Ubuntu 26.04 ARM64 guest, Linux 7.0.0-28, GCC 15.2.0, Debug build.
+This measures syscall and driver overhead in one VM, not bare-metal peak throughput.
+
 <table>
   <tr>
     <td><img src="docs/SYSCALLS.svg" alt="Charlatan system call paths"></td>
     <td><img src="docs/IOCTL-ABI.svg" alt="Charlatan ioctl ABI"></td>
   </tr>
 </table>
+
+![Queue ownership, blocked readers, reset, and producer concurrency](docs/CONCURRENCY.svg)
 
 ## What the harness checks
 
