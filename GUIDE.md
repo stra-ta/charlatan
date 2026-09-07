@@ -29,6 +29,20 @@ The full local suite is `./scripts/confidence.sh`; it runs the userspace checks 
 
 If the dependency check fails, run `./scripts/install-deps.sh` and repeat the check.
 
+## VM refresh (gated, not done on this host)
+
+The kernel build, module load/unload, smoke, integration, stress, and benchmark paths require a Linux VM and have not been run from this macOS host.
+
+Satisfy every gate below before any VM refresh:
+
+- Lima VM definition: no Lima definition ships in this repo, so the VM owner must provide or vendor one (ARM64 Ubuntu guest, Apple Virtualization Framework host).
+- Preconditions inside the VM: the `aarch64-linux-gnu-gcc` toolchain, matching kernel headers (`linux-headers-$(uname -r)`), CMake, and root access for `scripts/load.sh` and `scripts/unload.sh`; `./scripts/check-deps.sh` verifies them.
+- Owner: TBD (named owner placeholder; record who ran the refresh alongside the run facts).
+
+Until the gate is satisfied, cite only the committed VM run facts in the Benchmark snapshot and Verification sections.
+
+`results/stream.json` is local-only benchmark output with no committed provenance; do not present it as evidence beyond the run that wrote it.
+
 `load.sh` refuses to replace an existing module instance.
 
 `unload.sh` refuses to unload while `/dev/charlatan0` is open.
