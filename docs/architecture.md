@@ -4,7 +4,7 @@
 C++20 harness -- read/write/ioctl/poll/epoll --> /dev/charlatan0
                                                     |
                                              mutex-protected ring
-                                             wait queue + delayed worker
+                                             wait queue
                                                     |
                                       read-only mmap observation page
 ```
@@ -15,11 +15,12 @@ The queue is global, not per file descriptor.
 
 Competing readers consume from the same FIFO, and writers serialize through one mutex.
 
-The implementation chooses ordinary mutexes and wait queues over lock-free state because reset, fault injection, and statistics must observe one coherent queue state.
+The implementation chooses an ordinary mutex and wait queue over lock-free
+state because reset, statistics, and FIFO ownership transitions must observe
+one coherent queue state.
 
-The mmap path publishes a copy of the queue for observation through a sequence counter.
-
-It does not replace the mutex-protected FIFO and it does not grant userspace ownership of queue slots.
+The mmap path publishes a copy of the queue for observation through a
+sequence counter, and it does not replace the mutex-protected FIFO.
 
 ## File operation contract
 
@@ -50,8 +51,6 @@ It does not replace the mutex-protected FIFO and it does not grant userspace own
 empty --enqueue--> nonempty --read--> empty
 nonempty --enqueue--> full --read--> nonempty
 any --reset--> empty + generation advance
-any --pause--> producer idle
-idle --set-rate/resume--> delayed producer active
 ```
 
 `reset` discards queued events, increments the reset generation, and wakes waiters.
@@ -60,6 +59,14 @@ Multiple resets before a descriptor reads are coalesced into one `ECANCELED` obs
 
 ## Teardown
 
-Module exit first marks shutdown, wakes waiters, synchronously cancels the delayed worker, then destroys the device and character-device registration.
+Module exit marks shutdown, wakes waiters, destroys the device and
+character-device registration, then releases the snapshot page.
 
 The supplied unload script also refuses unload if `/proc/*/fd` shows an open device descriptor.
+
+## What is not here
+
+The module has no built-in event producer and no fault-injection commands.
+Both existed in ABI version 4 to make the device self-exercising; the harness
+now drives every queue state through `write()`, `read()`, reset, and mmap
+directly, so the device surface is limited to what the file operations expose.

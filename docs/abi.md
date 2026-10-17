@@ -2,7 +2,7 @@
 
 The shared ABI is `include/uapi/charlatan.h`.
 
-The ABI version is `4`.
+The ABI version is `5`.
 
 Commands carrying a structure require its `abi_version` to match exactly.
 
@@ -14,46 +14,31 @@ Malformed pointers return `EFAULT` when the kernel copies them.
 |---|---|
 | `RESET` | Clear the queue, count discarded events, advance reset generation, wake waiters. |
 | `GET_STATS` | Return a mutex-consistent snapshot. It is not a transactional history. |
-| `SET_RATE` | Set a producer period from 0 to 60,000 ms. Zero stops production. |
-| `PAUSE` | Stop scheduled production while retaining the configured period. |
-| `RESUME` | Restart production at the configured nonzero period. |
-| `INJECT_OVERFLOW` | Attempt to enqueue up to 100,000 deterministic synthetic events. Excess events follow the normal drop-newest policy. |
-| `SET_FAULTS` | Set `EIO` countdowns and an optional 0 to 1,000 ms producer-control delay for deterministic control-plane race tests. |
 
-Producer-control commands are serialized.
+## Version 5 change
 
-Each successful `SET_RATE`, `PAUSE`, or `RESUME` completes with the matching worker state installed, even when callers issue those commands concurrently.
+Commands `0x03` through `0x07` (`SET_RATE`, `PAUSE`, `RESUME`,
+`INJECT_OVERFLOW`, `SET_FAULTS`) were retired with the module's built-in
+producer and fault countdowns. They now return `ENOTTY` like any unknown
+command, and `struct charlatan_stats` dropped the producer, injection, and
+fault fields. Events enter the queue through `write()` only.
 
-`producer_control_delay_ms` is sampled by `SET_RATE` and `PAUSE` after their state update and before cancellation.
+## Statistics
 
-`RESUME` is not delayed.
+`GET_STATS` reports a snapshot under the queue mutex, so every field describes
+a single critical section.
 
-The producer is intentionally disabled at module load for deterministic tests.
+| Field | Meaning |
+|---|---|
+| `produced` | Every accepted queue insertion. |
+| `consumed` | Events removed after a successful copy to userspace. |
+| `dropped` | Newest events rejected because the ring was full. |
+| `reset_discards` | Events cleared by reset. |
+| `resets` | Completed reset commands. |
+| `queue_depth` | Queue depth at snapshot time, matching the mmap page. |
+| `queue_capacity` | 128, the fixed ring size. |
 
-`GET_STATS` reports a snapshot under the queue mutex, so every field describes a single critical section.
+All counters persist across `RESET` for the module lifetime only.
 
-`produced` counts every accepted queue insertion, including manual writes and delayed-worker events.
-
-`injected` is the accepted subset created by write or overflow injection.
-
-`consumed` counts events removed after a successful copy to userspace.
-
-`dropped` counts newest events rejected because the ring was full.
-
-`reset_discards` counts events cleared by reset, and `resets` counts completed reset commands.
-
-`read_failures` and `write_failures` count the `EIO` responses produced by fault countdowns.
-
-`producer_running` reports whether the delayed producer is enabled in the same mutex-consistent snapshot.
-
-`producer_control_waiters` counts control ioctls that have entered the producer-control path.
-
-`producer_control_delay_active` reports an active deterministic delay between the `SET_RATE` or `PAUSE` state update and cancellation.
-
-All counters persist across `RESET` and module lifetime only.
-
-Fault countdowns are global to the device, not per descriptor.
-
-They are consumed before empty-queue, reset-generation, or full-queue checks, but after read-size validation and write user-copy validation.
-
-Fault configuration persists across reset and does not change poll readiness until the affected operation runs.
+`reserved` is zero-filled padding that keeps the layout stable for future
+fields.

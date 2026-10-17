@@ -238,93 +238,32 @@ void test_poll_and_epoll() {
     require(::poll(&priority_poll, 1, 0) == 0, "POLLPRI remained after reset acknowledgement");
 }
 
-void test_control_plane() {
+void test_queue_full_and_stats() {
     auto fd = open_device(O_RDWR | O_NONBLOCK);
     reset_and_acknowledge(fd.get());
     const auto before = stats(fd.get());
-    std::uint32_t inject_count = before.queue_capacity + 1;
-    require(::ioctl(fd.get(), CHARLATAN_IOC_INJECT_OVERFLOW, &inject_count) == 0, "overflow injection failed");
+    for (std::uint32_t value = 0; value < before.queue_capacity; ++value) {
+        write_event(fd.get(), value);
+    }
+    charlatan_event event{};
+    expect_errno(::write(fd.get(), &event, sizeof(event)), ENOSPC, "write into a full queue");
     const auto overflowed = stats(fd.get());
-    require(overflowed.queue_depth == overflowed.queue_capacity, "overflow did not fill queue");
-    require(overflowed.dropped == before.dropped + 1, "overflow policy did not drop newest event");
+    require(overflowed.queue_depth == overflowed.queue_capacity, "full queue reported a wrong depth");
+    require(overflowed.dropped == before.dropped + 1, "full queue did not count the dropped event");
     pollfd writable{.fd = fd.get(), .events = POLLOUT, .revents = 0};
     require(::poll(&writable, 1, 0) == 0, "full queue reported write readiness");
     (void)read_event(fd.get());
     require(::poll(&writable, 1, 200) == 1 && (writable.revents & POLLOUT),
-            "draining full queue did not wake write readiness");
+            "draining a full queue did not wake write readiness");
     for (std::uint32_t value = 1; value < overflowed.queue_capacity; ++value) {
         (void)read_event(fd.get());
     }
-
-    charlatan_fault_config faults{.abi_version = CHARLATAN_ABI_VERSION, .fail_next_reads = 1,
-                                   .fail_next_writes = 1, .producer_control_delay_ms = 0};
-    require(::ioctl(fd.get(), CHARLATAN_IOC_SET_FAULTS, &faults) == 0, "fault setup failed");
-    charlatan_event event{};
-    expect_errno(::write(fd.get(), &event, sizeof(event)), EIO, "injected write fault");
-    write_event(fd.get(), 303);
-    expect_errno(::read(fd.get(), &event, sizeof(event)), EIO, "injected read fault");
-    require(read_event(fd.get()).value == 303, "read fault consumed event");
-
-    charlatan_rate_config bad_rate{.abi_version = 0, .period_ms = 1};
-    expect_errno(::ioctl(fd.get(), CHARLATAN_IOC_SET_RATE, &bad_rate), EINVAL, "bad rate ABI");
-    charlatan_rate_config rate{.abi_version = CHARLATAN_ABI_VERSION, .period_ms = 5};
-    require(::ioctl(fd.get(), CHARLATAN_IOC_SET_RATE, &rate) == 0, "start producer failed");
-    pollfd producer_poll{.fd = fd.get(), .events = POLLIN, .revents = 0};
-    require(::poll(&producer_poll, 1, 500) == 1, "producer did not generate event");
-    (void)read_event(fd.get());
-    require(::ioctl(fd.get(), CHARLATAN_IOC_PAUSE) == 0, "pause producer failed");
+    const auto drained = stats(fd.get());
+    require(drained.queue_depth == 0 && drained.consumed == before.consumed + overflowed.queue_capacity,
+            "drain accounting mismatch");
 
     expect_errno(::ioctl(fd.get(), _IO('x', 1)), ENOTTY, "invalid ioctl");
-}
-
-void test_concurrent_producer_control() {
-    auto control = open_device(O_RDWR | O_NONBLOCK);
-    auto pauser = open_device(O_RDWR | O_NONBLOCK);
-    auto resumer = open_device(O_RDWR | O_NONBLOCK);
-    charlatan_rate_config initial_rate{.abi_version = CHARLATAN_ABI_VERSION, .period_ms = 2};
-    require(::ioctl(control.get(), CHARLATAN_IOC_SET_RATE, &initial_rate) == 0, "initial rate setup failed");
-
-    charlatan_fault_config fault{.abi_version = CHARLATAN_ABI_VERSION, .fail_next_reads = 0,
-                                  .fail_next_writes = 0, .producer_control_delay_ms = 100};
-    require(::ioctl(control.get(), CHARLATAN_IOC_SET_FAULTS, &fault) == 0, "control delay setup failed");
-    auto pause_worker = std::async(std::launch::async, [&] {
-        return ::ioctl(pauser.get(), CHARLATAN_IOC_PAUSE);
-    });
-    const auto deadline = std::chrono::steady_clock::now() + 500ms;
-    auto snapshot = stats(control.get());
-    while (!(snapshot.producer_running == 0 && snapshot.producer_control_delay_active == 1 &&
-             snapshot.producer_control_waiters == 1) && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(1ms);
-        snapshot = stats(control.get());
-    }
-    require(snapshot.producer_running == 0 && snapshot.producer_control_delay_active == 1 &&
-                snapshot.producer_control_waiters == 1,
-            "pause did not enter its injected delay");
-    auto resume_worker = std::async(std::launch::async, [&] { return ::ioctl(resumer.get(), CHARLATAN_IOC_RESUME); });
-    snapshot = stats(control.get());
-    while (!(snapshot.producer_running == 0 && snapshot.producer_control_delay_active == 1 &&
-             snapshot.producer_control_waiters == 2) && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(1ms);
-        snapshot = stats(control.get());
-    }
-    require(snapshot.producer_running == 0 && snapshot.producer_control_delay_active == 1 &&
-                snapshot.producer_control_waiters == 2,
-            "resume did not enter the control path during pause");
-    require(resume_worker.wait_for(0ms) == std::future_status::timeout,
-            "resume completed before pause released producer control");
-    reset_and_acknowledge(control.get());
-    require(get_with_timeout(pause_worker, "delayed pause") == 0, "delayed pause failed");
-    require(get_with_timeout(resume_worker, "delayed resume") == 0, "delayed resume failed");
-    reset_and_acknowledge(control.get());
-    const auto final_snapshot = stats(control.get());
-    require(final_snapshot.producer_running == 1, "resume did not leave producer enabled");
-    pollfd producer_poll{.fd = control.get(), .events = POLLIN, .revents = 0};
-    require(::poll(&producer_poll, 1, 500) == 1 && (producer_poll.revents & POLLIN),
-            "producer did not restart after concurrent control");
-    (void)read_event(control.get());
-    fault.producer_control_delay_ms = 0;
-    require(::ioctl(control.get(), CHARLATAN_IOC_SET_FAULTS, &fault) == 0, "control delay cleanup failed");
-    require(::ioctl(control.get(), CHARLATAN_IOC_PAUSE) == 0, "final producer pause failed");
+    expect_errno(::ioctl(fd.get(), _IO('C', 0x05)), ENOTTY, "retired ioctl command");
 }
 
 void test_reset_wakes_blocked_reader() {
@@ -360,8 +299,7 @@ int main() {
         test_mmap_snapshot();
         test_blocking_and_wraparound();
         test_poll_and_epoll();
-        test_control_plane();
-        test_concurrent_producer_control();
+        test_queue_full_and_stats();
         test_reset_wakes_blocked_reader();
         std::cout << "integration tests passed\n";
         return 0;

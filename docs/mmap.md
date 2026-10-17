@@ -38,7 +38,14 @@ The kernel owns the page and all writes to it.
 
 The VMA rejects `PROT_WRITE`, clears `VM_MAYWRITE`, and marks the mapping non-expandable and non-dumpable.
 
-The page is retained while a VMA exists through the VMA callbacks' module reference.
+The page is retained while a VMA exists through a module reference, and the
+reference is balanced carefully: the kernel invokes `vm_ops->open` only when a
+VMA is duplicated (fork or split), never for the initial `mmap`, so
+`charlatan_mmap` takes the reference for the initial mapping itself and
+`vm_ops->close` releases one reference on every teardown. Taking the reference
+only in the open callback leaves every close with an unbalanced `module_put`,
+which drains the module's refcount until `try_module_get` fails and every
+subsequent `open()` returns `ENXIO` until the module is reloaded.
 
 Closing the file descriptor does not make an existing mapping writable or change the snapshot contract.
 
@@ -63,6 +70,4 @@ The mmap mode also reads a consistent snapshot after each write, so its result m
 
 It is not a zero-copy consumption claim.
 
-The benchmark output identifies the transport mode and must retain the commit and machine metadata supplied by the surrounding campaign runner.
-
-The current repository has no Linux mmap benchmark result.
+The benchmark output identifies the transport mode; record its environment label with any result.

@@ -1,25 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/cdev.h>
-#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/fs.h>
-#include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/workqueue.h>
+#include <linux/version.h>
 
 #include "../include/uapi/charlatan.h"
 
 #define CHARLATAN_DEVICE_NAME "charlatan0"
 #define CHARLATAN_QUEUE_CAPACITY 128U
 #define CHARLATAN_MAX_READ_EVENTS 64U
-#define CHARLATAN_MAX_PERIOD_MS 60000U
-#define CHARLATAN_MAX_OVERFLOW_INJECT 100000U
-#define CHARLATAN_MAX_CONTROL_DELAY_MS 1000U
 
 struct charlatan_reader {
 	u64 reset_generation;
@@ -27,9 +22,7 @@ struct charlatan_reader {
 
 struct charlatan_device {
 	struct mutex lock;
-	struct mutex producer_control_lock;
 	wait_queue_head_t read_wait;
-	struct delayed_work producer_work;
 	struct charlatan_event queue[CHARLATAN_QUEUE_CAPACITY];
 	struct page *snapshot_page;
 	struct charlatan_mmap_snapshot *snapshot;
@@ -38,14 +31,7 @@ struct charlatan_device {
 	u32 head;
 	u32 tail;
 	u32 depth;
-	u32 period_ms;
-	u32 fail_next_reads;
-	u32 fail_next_writes;
-	u32 producer_control_delay_ms;
-	bool producer_running;
-	bool producer_control_delay_active;
 	bool shutting_down;
-	atomic_t producer_control_waiters;
 	u64 reset_generation;
 	u64 next_sequence;
 	struct charlatan_stats stats;
@@ -86,6 +72,13 @@ static void charlatan_snapshot_locked(void)
 	WRITE_ONCE(snapshot->version, charlatan.snapshot_version);
 }
 
+/*
+ * The kernel calls vm_ops->open only when a VMA is duplicated (fork or
+ * split), never for the initial mmap.  The initial mapping therefore takes
+ * its reference in charlatan_mmap, and every VMA teardown runs exactly one
+ * charlatan_snapshot_vma_close.  Taking the reference only here would put a
+ * module_put on close that no module_get ever balanced.
+ */
 static void charlatan_snapshot_vma_open(struct vm_area_struct *vma)
 {
 	struct charlatan_device *device = vma->vm_private_data;
@@ -107,20 +100,6 @@ static const struct vm_operations_struct charlatan_snapshot_vm_ops = {
 	.close = charlatan_snapshot_vma_close,
 };
 
-static void charlatan_control_delay(u32 delay_ms)
-{
-	if (!delay_ms)
-		return;
-
-	mutex_lock(&charlatan.lock);
-	charlatan.producer_control_delay_active = true;
-	mutex_unlock(&charlatan.lock);
-	msleep(delay_ms);
-	mutex_lock(&charlatan.lock);
-	charlatan.producer_control_delay_active = false;
-	mutex_unlock(&charlatan.lock);
-}
-
 static bool charlatan_has_events_or_reset(struct charlatan_reader *reader)
 {
 	bool ready;
@@ -132,7 +111,7 @@ static bool charlatan_has_events_or_reset(struct charlatan_reader *reader)
 	return ready;
 }
 
-static bool charlatan_enqueue_locked(u32 value, u32 flags, bool injected)
+static bool charlatan_enqueue_locked(u32 value, u32 flags)
 {
 	struct charlatan_event *event;
 
@@ -149,30 +128,9 @@ static bool charlatan_enqueue_locked(u32 value, u32 flags, bool injected)
 	charlatan.head = (charlatan.head + 1) % CHARLATAN_QUEUE_CAPACITY;
 	charlatan.depth++;
 	charlatan.stats.produced++;
-	if (injected)
-		charlatan.stats.injected++;
 	charlatan.stats.queue_depth = charlatan.depth;
 	charlatan_snapshot_locked();
 	return true;
-}
-
-static void charlatan_producer(struct work_struct *work)
-{
-	bool wake = false;
-	u32 delay_ms = 0;
-
-	mutex_lock(&charlatan.lock);
-	if (!charlatan.shutting_down && charlatan.producer_running) {
-		wake = charlatan_enqueue_locked((u32)charlatan.next_sequence, 0, false);
-		delay_ms = charlatan.period_ms;
-	}
-	mutex_unlock(&charlatan.lock);
-
-	if (wake)
-		wake_up_interruptible(&charlatan.read_wait);
-	if (delay_ms)
-		mod_delayed_work(system_wq, &charlatan.producer_work,
-				 msecs_to_jiffies(delay_ms));
 }
 
 static int charlatan_open(struct inode *inode, struct file *file)
@@ -212,14 +170,23 @@ static int charlatan_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EPERM;
 
 	/* The page is an observation snapshot, never a user-writable ring. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	vm_flags_clear(vma, VM_MAYWRITE);
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+#else
 	vma->vm_flags &= ~VM_MAYWRITE;
 	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+#endif
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 	vma->vm_private_data = &charlatan;
-	vma->vm_ops = &charlatan_snapshot_vm_ops;
 	error = vm_insert_page(vma, vma->vm_start, charlatan.snapshot_page);
 	if (error)
 		return error;
+	/* vm_ops->close runs once per teardown, so the initial mapping takes
+	 * its own reference before the VMA becomes visible (see vma_open). */
+	vma->vm_ops = &charlatan_snapshot_vm_ops;
+	atomic_inc(&charlatan.snapshot_mappings);
+	__module_get(THIS_MODULE);
 	return 0;
 }
 
@@ -239,12 +206,6 @@ static ssize_t charlatan_read(struct file *file, char __user *buffer, size_t cou
 
 	for (;;) {
 		mutex_lock(&charlatan.lock);
-		if (charlatan.fail_next_reads) {
-			charlatan.fail_next_reads--;
-			charlatan.stats.read_failures++;
-			mutex_unlock(&charlatan.lock);
-			return -EIO;
-		}
 		if (charlatan.reset_generation != reader->reset_generation) {
 			reader->reset_generation = charlatan.reset_generation;
 			mutex_unlock(&charlatan.lock);
@@ -298,13 +259,7 @@ static ssize_t charlatan_write(struct file *file, const char __user *buffer, siz
 		return -EFAULT;
 
 	mutex_lock(&charlatan.lock);
-	if (charlatan.fail_next_writes) {
-		charlatan.fail_next_writes--;
-		charlatan.stats.write_failures++;
-		mutex_unlock(&charlatan.lock);
-		return -EIO;
-	}
-	wake = charlatan_enqueue_locked(input.value, input.flags, true);
+	wake = charlatan_enqueue_locked(input.value, input.flags);
 	mutex_unlock(&charlatan.lock);
 	if (!wake)
 		return -ENOSPC;
@@ -344,14 +299,7 @@ static void charlatan_reset_locked(void)
 
 static long charlatan_ioctl(struct file *file, unsigned int command, unsigned long argument)
 {
-	struct charlatan_rate_config rate;
-	struct charlatan_fault_config faults;
 	struct charlatan_stats stats;
-	u32 overflow;
-	u32 index;
-	u32 resume_period;
-	u32 control_delay_ms;
-	bool wake = false;
 
 	switch (command) {
 	case CHARLATAN_IOC_RESET:
@@ -365,86 +313,8 @@ static long charlatan_ioctl(struct file *file, unsigned int command, unsigned lo
 		stats = charlatan.stats;
 		stats.abi_version = CHARLATAN_ABI_VERSION;
 		stats.queue_capacity = CHARLATAN_QUEUE_CAPACITY;
-		stats.producer_period_ms = charlatan.period_ms;
-		stats.producer_running = charlatan.producer_running;
-		stats.producer_control_waiters = atomic_read(&charlatan.producer_control_waiters);
-		stats.producer_control_delay_active = charlatan.producer_control_delay_active;
 		mutex_unlock(&charlatan.lock);
 		return copy_to_user((void __user *)argument, &stats, sizeof(stats)) ? -EFAULT : 0;
-	case CHARLATAN_IOC_SET_RATE:
-		if (copy_from_user(&rate, (void __user *)argument, sizeof(rate)))
-			return -EFAULT;
-		if (rate.abi_version != CHARLATAN_ABI_VERSION || rate.period_ms > CHARLATAN_MAX_PERIOD_MS)
-			return -EINVAL;
-		atomic_inc(&charlatan.producer_control_waiters);
-		mutex_lock(&charlatan.producer_control_lock);
-		mutex_lock(&charlatan.lock);
-		charlatan.period_ms = rate.period_ms;
-		charlatan.producer_running = rate.period_ms != 0;
-		control_delay_ms = charlatan.producer_control_delay_ms;
-		mutex_unlock(&charlatan.lock);
-		charlatan_control_delay(control_delay_ms);
-		cancel_delayed_work_sync(&charlatan.producer_work);
-		if (rate.period_ms)
-			mod_delayed_work(system_wq, &charlatan.producer_work,
-					 msecs_to_jiffies(rate.period_ms));
-		mutex_unlock(&charlatan.producer_control_lock);
-		atomic_dec(&charlatan.producer_control_waiters);
-		return 0;
-	case CHARLATAN_IOC_PAUSE:
-		atomic_inc(&charlatan.producer_control_waiters);
-		mutex_lock(&charlatan.producer_control_lock);
-		mutex_lock(&charlatan.lock);
-		charlatan.producer_running = false;
-		control_delay_ms = charlatan.producer_control_delay_ms;
-		mutex_unlock(&charlatan.lock);
-		charlatan_control_delay(control_delay_ms);
-		cancel_delayed_work_sync(&charlatan.producer_work);
-		mutex_unlock(&charlatan.producer_control_lock);
-		atomic_dec(&charlatan.producer_control_waiters);
-		return 0;
-	case CHARLATAN_IOC_RESUME:
-		atomic_inc(&charlatan.producer_control_waiters);
-		mutex_lock(&charlatan.producer_control_lock);
-		mutex_lock(&charlatan.lock);
-		if (!charlatan.period_ms) {
-			mutex_unlock(&charlatan.lock);
-			mutex_unlock(&charlatan.producer_control_lock);
-			atomic_dec(&charlatan.producer_control_waiters);
-			return -EINVAL;
-		}
-		charlatan.producer_running = true;
-		resume_period = charlatan.period_ms;
-		mutex_unlock(&charlatan.lock);
-		mod_delayed_work(system_wq, &charlatan.producer_work,
-				 msecs_to_jiffies(resume_period));
-		mutex_unlock(&charlatan.producer_control_lock);
-		atomic_dec(&charlatan.producer_control_waiters);
-		return 0;
-	case CHARLATAN_IOC_INJECT_OVERFLOW:
-		if (copy_from_user(&overflow, (void __user *)argument, sizeof(overflow)))
-			return -EFAULT;
-		if (overflow > CHARLATAN_MAX_OVERFLOW_INJECT)
-			return -EINVAL;
-		mutex_lock(&charlatan.lock);
-		for (index = 0; index < overflow; index++)
-			wake |= charlatan_enqueue_locked(index, 0, true);
-		mutex_unlock(&charlatan.lock);
-		if (wake)
-			wake_up_interruptible(&charlatan.read_wait);
-		return 0;
-	case CHARLATAN_IOC_SET_FAULTS:
-		if (copy_from_user(&faults, (void __user *)argument, sizeof(faults)))
-			return -EFAULT;
-		if (faults.abi_version != CHARLATAN_ABI_VERSION ||
-		    faults.producer_control_delay_ms > CHARLATAN_MAX_CONTROL_DELAY_MS)
-			return -EINVAL;
-		mutex_lock(&charlatan.lock);
-		charlatan.fail_next_reads = faults.fail_next_reads;
-		charlatan.fail_next_writes = faults.fail_next_writes;
-		charlatan.producer_control_delay_ms = faults.producer_control_delay_ms;
-		mutex_unlock(&charlatan.lock);
-		return 0;
 	default:
 		return -ENOTTY;
 	}
@@ -468,15 +338,12 @@ static int __init charlatan_init(void)
 	int error;
 
 	mutex_init(&charlatan.lock);
-	mutex_init(&charlatan.producer_control_lock);
-	atomic_set(&charlatan.producer_control_waiters, 0);
 	atomic_set(&charlatan.snapshot_mappings, 0);
 	charlatan.snapshot_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (!charlatan.snapshot_page)
 		return -ENOMEM;
 	charlatan.snapshot = page_address(charlatan.snapshot_page);
 	init_waitqueue_head(&charlatan.read_wait);
-	INIT_DELAYED_WORK(&charlatan.producer_work, charlatan_producer);
 	mutex_lock(&charlatan.lock);
 	charlatan_snapshot_locked();
 	mutex_unlock(&charlatan.lock);
@@ -488,7 +355,11 @@ static int __init charlatan_init(void)
 	error = cdev_add(&charlatan_cdev, charlatan_devt, 1);
 	if (error)
 		goto unregister_region;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 	charlatan_class = class_create(CHARLATAN_DEVICE_NAME);
+#else
+	charlatan_class = class_create(THIS_MODULE, CHARLATAN_DEVICE_NAME);
+#endif
 	if (IS_ERR(charlatan_class)) {
 		error = PTR_ERR(charlatan_class);
 		goto delete_cdev;
@@ -507,7 +378,7 @@ delete_cdev:
 	cdev_del(&charlatan_cdev);
 unregister_region:
 	unregister_chrdev_region(charlatan_devt, 1);
-	free_snapshot:
+free_snapshot:
 	free_page((unsigned long)charlatan.snapshot);
 	charlatan.snapshot = NULL;
 	charlatan.snapshot_page = NULL;
@@ -516,13 +387,10 @@ unregister_region:
 
 static void __exit charlatan_exit(void)
 {
-	mutex_lock(&charlatan.producer_control_lock);
 	mutex_lock(&charlatan.lock);
 	charlatan.shutting_down = true;
 	mutex_unlock(&charlatan.lock);
 	wake_up_interruptible(&charlatan.read_wait);
-	cancel_delayed_work_sync(&charlatan.producer_work);
-	mutex_unlock(&charlatan.producer_control_lock);
 	device_destroy(charlatan_class, charlatan_devt);
 	class_destroy(charlatan_class);
 	cdev_del(&charlatan_cdev);

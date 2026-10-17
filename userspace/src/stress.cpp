@@ -59,17 +59,6 @@ int main() {
         std::perror("reset");
         return 1;
     }
-    charlatan_fault_config faults{.abi_version = CHARLATAN_ABI_VERSION, .fail_next_reads = 0,
-                                  .fail_next_writes = 0, .producer_control_delay_ms = 0};
-    if (::ioctl(control.get(), CHARLATAN_IOC_SET_FAULTS, &faults) != 0) {
-        std::perror("clear faults");
-        return 1;
-    }
-    charlatan_rate_config rate{.abi_version = CHARLATAN_ABI_VERSION, .period_ms = 1};
-    if (::ioctl(control.get(), CHARLATAN_IOC_SET_RATE, &rate) != 0) {
-        std::perror("start producer");
-        return 1;
-    }
     std::atomic<bool> stop{false};
     std::atomic<std::uint64_t> writes{0};
     std::atomic<std::uint64_t> reads{0};
@@ -145,9 +134,6 @@ int main() {
     resetter.join();
     opener.join();
 
-    if (::ioctl(control.get(), CHARLATAN_IOC_PAUSE) != 0) {
-        ++unexpected;
-    }
     std::cout << "writes=" << writes << " reads=" << reads << " resets=" << resets
               << " unexpected=" << unexpected << '\n';
     return unexpected == 0 ? 0 : 1;
