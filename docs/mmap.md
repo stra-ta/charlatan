@@ -38,7 +38,14 @@ The kernel owns the page and all writes to it.
 
 The VMA rejects `PROT_WRITE`, clears `VM_MAYWRITE`, and marks the mapping non-expandable and non-dumpable.
 
-The page is retained while a VMA exists through the VMA callbacks' module reference.
+The page is retained while a VMA exists through a module reference, and the
+reference is balanced carefully: the kernel invokes `vm_ops->open` only when a
+VMA is duplicated (fork or split), never for the initial `mmap`, so
+`charlatan_mmap` takes the reference for the initial mapping itself and
+`vm_ops->close` releases one reference on every teardown. Taking the reference
+only in the open callback leaves every close with an unbalanced `module_put`,
+which drains the module's refcount until `try_module_get` fails and every
+subsequent `open()` returns `ENXIO` until the module is reloaded.
 
 Closing the file descriptor does not make an existing mapping writable or change the snapshot contract.
 

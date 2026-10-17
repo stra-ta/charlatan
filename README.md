@@ -12,12 +12,16 @@ userspace.
 
 | Workload | Result |
 | --- | ---: |
-| 10,000 alternating write/read event round trips | 8.30e5 events/s |
+| 10,000 alternating write/read event round trips (syscall transport) | 9.91e5 events/s |
+| 10,000 round trips with one snapshot read per iteration (mmap transport) | 3.50e5 events/s |
 
-Apple M1 host, Lima Apple Virtualization, Ubuntu 26.04 ARM64 guest,
-Linux 7.0.0-28-generic, GCC 15.2.0, Debug build, ABI version 4.
+Rerun 2026-10-17: Apple M1 host, Lima Apple Virtualization, Debian 12 ARM64
+guest, Linux 6.1.0-50-cloud-arm64, GCC 12.2.0, Debug build, ABI version 5,
+4 vCPU / 3 GiB.
 This measures syscall and driver overhead in one VM, not bare-metal peak
-throughput. This table is updated with the current VM rerun below.
+throughput.
+The earlier Ubuntu 26.04 run stays in [docs/measurements.md](docs/measurements.md)
+with its own environment label.
 
 ## What the harness checks
 

@@ -29,5 +29,11 @@ area.
 The primary limitation is that test permission mode is deliberately broad in
 the VM.
 
+A kernel-level detail worth knowing: the kernel calls `vm_ops->open` only when
+a VMA is duplicated, never for the initial `mmap`, while `vm_ops->close` runs
+on every teardown. The module therefore takes its page reference in the mmap
+callback itself; anyone auditing module refcount bugs will look for exactly
+that asymmetry.
+
 A production deployment would use a udev rule and group ownership, and would
 test against its target distribution kernel configuration.

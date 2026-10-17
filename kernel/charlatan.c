@@ -72,6 +72,13 @@ static void charlatan_snapshot_locked(void)
 	WRITE_ONCE(snapshot->version, charlatan.snapshot_version);
 }
 
+/*
+ * The kernel calls vm_ops->open only when a VMA is duplicated (fork or
+ * split), never for the initial mmap.  The initial mapping therefore takes
+ * its reference in charlatan_mmap, and every VMA teardown runs exactly one
+ * charlatan_snapshot_vma_close.  Taking the reference only here would put a
+ * module_put on close that no module_get ever balanced.
+ */
 static void charlatan_snapshot_vma_open(struct vm_area_struct *vma)
 {
 	struct charlatan_device *device = vma->vm_private_data;
@@ -172,10 +179,14 @@ static int charlatan_mmap(struct file *file, struct vm_area_struct *vma)
 #endif
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 	vma->vm_private_data = &charlatan;
-	vma->vm_ops = &charlatan_snapshot_vm_ops;
 	error = vm_insert_page(vma, vma->vm_start, charlatan.snapshot_page);
 	if (error)
 		return error;
+	/* vm_ops->close runs once per teardown, so the initial mapping takes
+	 * its own reference before the VMA becomes visible (see vma_open). */
+	vma->vm_ops = &charlatan_snapshot_vm_ops;
+	atomic_inc(&charlatan.snapshot_mappings);
+	__module_get(THIS_MODULE);
 	return 0;
 }
 
@@ -344,7 +355,11 @@ static int __init charlatan_init(void)
 	error = cdev_add(&charlatan_cdev, charlatan_devt, 1);
 	if (error)
 		goto unregister_region;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 	charlatan_class = class_create(CHARLATAN_DEVICE_NAME);
+#else
+	charlatan_class = class_create(THIS_MODULE, CHARLATAN_DEVICE_NAME);
+#endif
 	if (IS_ERR(charlatan_class)) {
 		error = PTR_ERR(charlatan_class);
 		goto delete_cdev;
