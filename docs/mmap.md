@@ -63,6 +63,4 @@ The mmap mode also reads a consistent snapshot after each write, so its result m
 
 It is not a zero-copy consumption claim.
 
-The benchmark output identifies the transport mode and must retain the commit and machine metadata supplied by the surrounding campaign runner.
-
-The current repository has no Linux mmap benchmark result.
+The benchmark output identifies the transport mode; record its environment label with any result.

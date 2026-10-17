@@ -5,7 +5,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define CHARLATAN_ABI_VERSION 4U
+#define CHARLATAN_ABI_VERSION 5U
 #define CHARLATAN_MMAP_ABI_VERSION 1U
 #define CHARLATAN_EVENT_BYTES 24U
 #define CHARLATAN_MMAP_SNAPSHOT_EVENTS 128U
@@ -40,40 +40,23 @@ struct charlatan_stats {
 	__u32 abi_version;
 	__u32 queue_capacity;
 	__u32 queue_depth;
-	__u32 producer_period_ms;
+	__u32 reserved;
 	__u64 produced;
-	__u64 injected;
 	__u64 consumed;
 	__u64 dropped;
 	__u64 reset_discards;
 	__u64 resets;
-	__u64 read_failures;
-	__u64 write_failures;
-	__u32 producer_running;
-	__u32 producer_control_waiters;
-	__u32 producer_control_delay_active;
-	__u32 reserved;
-};
-
-struct charlatan_rate_config {
-	__u32 abi_version;
-	__u32 period_ms;
-};
-
-struct charlatan_fault_config {
-	__u32 abi_version;
-	__u32 fail_next_reads;
-	__u32 fail_next_writes;
-	__u32 producer_control_delay_ms;
 };
 
 #define CHARLATAN_IOC_MAGIC 'C'
 #define CHARLATAN_IOC_RESET _IO(CHARLATAN_IOC_MAGIC, 0x01)
 #define CHARLATAN_IOC_GET_STATS _IOR(CHARLATAN_IOC_MAGIC, 0x02, struct charlatan_stats)
-#define CHARLATAN_IOC_SET_RATE _IOW(CHARLATAN_IOC_MAGIC, 0x03, struct charlatan_rate_config)
-#define CHARLATAN_IOC_PAUSE _IO(CHARLATAN_IOC_MAGIC, 0x04)
-#define CHARLATAN_IOC_RESUME _IO(CHARLATAN_IOC_MAGIC, 0x05)
-#define CHARLATAN_IOC_INJECT_OVERFLOW _IOW(CHARLATAN_IOC_MAGIC, 0x06, __u32)
-#define CHARLATAN_IOC_SET_FAULTS _IOW(CHARLATAN_IOC_MAGIC, 0x07, struct charlatan_fault_config)
+/*
+ * Commands 0x03 through 0x07 (SET_RATE, PAUSE, RESUME, INJECT_OVERFLOW,
+ * SET_FAULTS) belonged to ABI version 4.  They controlled the module's
+ * built-in event producer and fault countdowns, both of which were removed in
+ * ABI version 5: events now enter the queue only through write(), and the
+ * recovery paths they exercised no longer exist.
+ */
 
 #endif

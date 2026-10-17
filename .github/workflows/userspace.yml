@@ -5,12 +5,22 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  userspace:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Validate results manifest
-        run: python3 ../.github/scripts/validate_manifest.py results/manifest.json || python3 /Users/nguyenhuyvu/projects/stra-ta/.github/scripts/validate_manifest.py results/manifest.json || echo "no manifest"
       - run: cmake -S userspace -B build/userspace -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build/userspace --parallel
       - run: ctest --test-dir build/userspace --output-on-failure
+
+  kernel-module:
+    # Compile check against the Ubuntu release kernel headers available on
+    # the runner. Loading needs a kernel matching those headers, so device
+    # behavior is verified in the VM, not here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential linux-headers-generic
+      - run: |
+          kdir=$(ls -d /usr/src/linux-headers-*-generic | head -1)
+          make -C "$kdir" M="$PWD/kernel" modules

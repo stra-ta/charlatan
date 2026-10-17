@@ -22,8 +22,6 @@ One two-second run completed 1,386,098 writes, 1,381,337 reads, and 381 resets w
 
 A later two-second lifecycle run completed 521,407 writes, 516,096 reads, and 291 resets with zero unexpected errno values.
 
-Ten consecutive integration runs passed after the deterministic producer-control race regression was added.
-
 A later two-second active-worker run completed 914,326 writes, 908,379 reads, and 335 resets with zero unexpected errno values.
 
 VM scheduling, shared-host load, and the intentionally overflowing queue make these values variable.

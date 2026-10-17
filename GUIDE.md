@@ -1,137 +1,60 @@
-# Charlatan
+# Charlatan guide
 
-Charlatan is a virtual Linux streaming character device with a C++20 test client.
+## What it is
 
-It is a small driver project for practicing the boundary between kernel code and userspace.
+A Linux character device, `/dev/charlatan0`, backed by a kernel module, plus a
+C++20 userspace harness that drives it through real system calls.
 
-It targets systems-software, embedded-Linux, and low-level C++ work.
+- A global 128-slot FIFO of fixed-size events, protected by one mutex.
+- Blocking and nonblocking `read()`, exact-size `write()`, `poll()`, and
+  level-triggered `epoll()`.
+- A versioned ioctl ABI, currently version 5: `RESET` and `GET_STATS`.
+- Reset modeled with a per-descriptor generation so blocked readers receive
+  `ECANCELED`.
+- A read-only mmap page that publishes a sequence-checked observation snapshot.
+- A full-event queue drops the newest event and reports it through `ENOSPC`
+  and the `dropped` counter.
 
-Charlatan builds against the running distribution kernel and matching headers in an ARM64 Ubuntu VM.
-
-![Charlatan event path from C++ clients through the character device to the mutex-protected ring and simulated producer.](docs/architecture.svg)
-
-## Quick start
-
-Run these commands inside the Ubuntu VM from the repository root.
+## Build
 
 ```sh
-./scripts/check-deps.sh
-./scripts/build.sh
-sudo ./scripts/load.sh
-./scripts/smoke.sh
-./scripts/test-integration.sh
-sudo ./scripts/unload.sh
+sudo ./scripts/install-deps.sh   # build-essential, cmake, kmod, pahole, kernel headers
+./scripts/build.sh               # userspace harness (CMake) + kernel module (kbuild)
 ```
 
-The host-only confidence check is `./scripts/verify.sh`.
+`build.sh` records the Ubuntu release, architecture, kernel, compiler, and
+CMake versions in `build/environment.txt`, and refuses to run without kernel
+headers for the running kernel. Set `CHARLATAN_KERNEL_CC` to override the
+kernel compiler (`cc` by default; set a cross compiler only when building from
+a different architecture).
 
-The full local suite is `./scripts/confidence.sh`; it runs the userspace checks and uses a loaded device for the integration, stress, and benchmark paths when one is available.
+Standard userspace preset:
 
-If the dependency check fails, run `./scripts/install-deps.sh` and repeat the check.
-
-## VM refresh (gated, not done on this host)
-
-The kernel build, module load/unload, smoke, integration, stress, and benchmark paths require a Linux VM and have not been run from this macOS host.
-
-Satisfy every gate below before any VM refresh:
-
-- Lima VM definition: no Lima definition ships in this repo, so the VM owner must provide or vendor one (ARM64 Ubuntu guest, Apple Virtualization Framework host).
-- Preconditions inside the VM: the `aarch64-linux-gnu-gcc` toolchain, matching kernel headers (`linux-headers-$(uname -r)`), CMake, and root access for `scripts/load.sh` and `scripts/unload.sh`; `./scripts/check-deps.sh` verifies them.
-- Owner: TBD (named owner placeholder; record who ran the refresh alongside the run facts).
-
-Until the gate is satisfied, cite only the committed VM run facts in the Benchmark snapshot and Verification sections.
-
-`results/stream.json` is local-only benchmark output with no committed provenance; do not present it as evidence beyond the run that wrote it.
-
-`load.sh` refuses to replace an existing module instance.
-
-`unload.sh` refuses to unload while `/dev/charlatan0` is open.
-
-## What it does
-
-- Registers `/dev/charlatan0` through an externally built kernel module.
-- Stores fixed-size events in a 128-slot FIFO ring.
-- Supports blocking and nonblocking `read()`, exact-size `write()`, `poll()`, and level-triggered `epoll`.
-- Exposes a read-only, sequence-checked mmap snapshot for observation without changing queue ownership.
-- Uses a versioned ioctl ABI for reset, statistics, producer control, overflow injection, and deterministic faults.
-- Models reset with a per-descriptor generation so blocked readers receive `ECANCELED`.
-- Drops the newest event when the queue is full and reports the loss through statistics.
-- Exercises concurrent producer control with a deterministic race regression.
-- Provides integration, stress, benchmark, and ASan/UBSan runs.
-
-![Charlatan system call surface](docs/SYSCALLS.svg)
-
-![Charlatan ioctl ABI](docs/IOCTL-ABI.svg)
-
-## Benchmark snapshot
-
-The benchmark alternates one `write()` and one `read()` so the queue does not overflow.
-
-| Configuration | Result | What it measures |
-| --- | ---: | --- |
-| 10,000 write/read event round trips | 8.30e5 events/s | Syscall and driver overhead in the VM |
-
-Run facts: Apple M1 host, Lima Apple Virtualization, Ubuntu 26.04 ARM64 guest, Linux 7.0.0-28-generic, GCC 15.2.0, CMake 4.2.3, Debug build.
-
-This is a virtualized single-machine result, not a bare-metal or peak-throughput claim.
-
-Run `./scripts/benchmark.sh 10000` with the module loaded to write the current result to `results/stream.json`.
-
-Compare the syscall-only and mmap-observation paths with `./build/userspace/charlatan-bench 10000 syscall` and `./build/userspace/charlatan-bench 10000 mmap`.
-
-The methodology and earlier observations are in [docs/measurements.md](docs/measurements.md).
-
-## Architecture
-
-```text
-userspace clients          kernel module                 device internals
-----------------          -------------                 -----------------
-read / write /            /dev/charlatan0               mutex-protected ring
-ioctl / epoll     ----->  file_operations       ----->  (128-slot FIFO)
-                                   |
-                                   v
-                          wait queue + delayed producer
+```sh
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
 ```
 
-| Component | Role |
-| --- | --- |
-| C++20 clients | Drive the device through system calls and assertions. |
-| `/dev/charlatan0` | Character device exposing the file operations. |
-| Bounded ring | 128-slot FIFO holding events under one mutex. |
-| Wait queue | Wakes blocked readers on events, reset, and capacity changes. |
-| Delayed producer | Simulates a hardware producer at a configurable rate. |
-| Mmap snapshot | Publishes a read-only, versioned copy of the FIFO for observation. |
+## Load, run, unload
 
-The kernel owns queue mutation and wakes waiters after events, resets, and capacity changes.
+```sh
+sudo ./scripts/load.sh      # insmod + wait for /dev/charlatan0
+./scripts/confidence.sh     # host verification + full device suite
+sudo ./scripts/unload.sh    # refuses to unload while the device is open
+```
 
-Readers compete for one global FIFO.
+`confidence.sh` runs the smoke, integration, stress, and both benchmark
+transports, and skips the device part with a clear message when the module is
+not loaded. Benchmark output can be written to JSON with
+`./scripts/benchmark.sh 10000`.
 
-The delayed worker simulates a device producer, while `write()` gives tests a deterministic injection path.
+The kernel module is built for the running kernel. Kernel-level verification
+therefore happens inside a Linux VM or a Linux host with matching headers;
+macOS hosts build and test only the userspace harness (CMake skips the
+Linux-only binaries and CTest runs the smoke usage check).
 
-![Charlatan concurrency](docs/CONCURRENCY.svg)
-
-## Verification
-
-| Environment | Evidence |
-| --- | --- |
-| Ubuntu 26.04 ARM64 VM | 10 consecutive integration runs passed. |
-| Ubuntu 26.04 ARM64 VM | Active-worker stress run completed 914,326 writes, 908,379 reads, and 335 resets with zero unexpected errno values. |
-| Ubuntu 26.04 ARM64 VM | Userspace ASan/UBSan integration run passed. |
-| GitHub Actions Ubuntu 24.04 | C++20 build and smoke usage test run on pushes and pull requests. |
-
-The integration client covers queue boundaries, invalid user destinations, wraparound, reset, `poll`, `epoll`, overflow accounting, ioctl validation, injected `EIO`, and concurrent producer control.
-
-It also checks mmap ABI metadata, FIFO observation, sequence metadata, drained snapshots, and rejection of writable mappings.
-
-The stress client runs two consumers, a writer, a resetter, and rapid open/close traffic for two seconds.
-
-## Development
-
-Build output records the Ubuntu release, architecture, kernel, compiler, and CMake version in `build/environment.txt`.
-
-Set `CHARLATAN_KERNEL_CC` to choose the compiler used for the external module.
-
-Run a sanitizer build in a separate directory with:
+## Sanitizers
 
 ```sh
 cmake -S userspace -B build/asan-ubsan -DCMAKE_BUILD_TYPE=Debug -DCHARLATAN_SANITIZER=address,undefined
@@ -141,25 +64,27 @@ ASAN_OPTIONS=detect_leaks=1 ./build/asan-ubsan/charlatan-tests
 sudo ./scripts/unload.sh
 ```
 
+`CHARLATAN_SANITIZER` also accepts `thread`. Kernel sanitizer and lock-debug
+results depend on the distribution kernel configuration and are not claimed.
+
 ## Documentation
 
-- [Architecture and contracts](docs/architecture.md) explains device operations, readiness, reset, and teardown.
-- [Control ABI](docs/abi.md) lists ioctl semantics and statistics fields.
-- [Validation strategy](docs/validation.md) describes integration, stress, sanitizer, and race coverage.
-- [Measurements](docs/measurements.md) records benchmark method and VM caveats.
-- [Mmap observation transport](docs/mmap.md) defines the read-only snapshot contract and benchmark mode.
-- [Interview notes](docs/interview-notes.md) records the key engineering choices.
+- [Architecture and contracts](docs/architecture.md) - operations, readiness, reset, teardown
+- [Control ABI](docs/abi.md) - ioctl semantics and statistics fields
+- [Validation strategy](docs/validation.md) - host vs VM coverage
+- [Measurements](docs/measurements.md) - benchmark method and labeled VM results
+- [Mmap observation transport](docs/mmap.md) - the snapshot contract
+- [Interview notes](docs/interview-notes.md) - what the design decisions were for
 
 ## Limitations
 
-The mmap page is an observation snapshot.
-
-It does not provide zero-copy queue consumption, per-reader cursors, or eventfd notifications.
-The development loader sets `/dev/charlatan0` to mode `0666` so a non-root harness can run in the VM.
-
-A deployed device should use a least-privilege udev rule and group ownership instead.
-
-Kernel lock debugging and kernel sanitizers depend on the target distribution kernel configuration and are not claimed here.
+- The queue is global and mutex-protected; there are no per-descriptor queues
+  and no lock-free claims.
+- The mmap page does not provide zero-copy consumption, per-reader cursors, or
+  eventfd notifications.
+- The development loader sets `/dev/charlatan0` to mode `0666`; a deployed
+  device should use a least-privilege udev rule and group ownership.
+- Benchmark values are evidence for the labeled VM, not bare-metal claims.
 
 ## License
 
